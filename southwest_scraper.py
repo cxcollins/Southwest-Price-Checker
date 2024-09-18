@@ -8,6 +8,40 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException
 
 import time
+from pymongo import MongoClient
+from dotenv import load_dotenv
+import os
+import logging
+import sys
+
+load_dotenv()
+
+mongo_uri = os.getenv("MONGO_URI")
+client = MongoClient(mongo_uri)
+
+print(mongo_uri)
+
+try:
+    database = client.get_database("flights")
+    flights_collection = database.get_collection("flights")
+
+    # Replace with a read, not a write
+    # result = flights_collection.insert_one({"departureTime": "12:00", "departureMeridiem": "AM", "arrivalTime": "12:00", "arrivalTimeMeridiem": "PM", "departureAirport": "SFO", "arrivalAirport": "BOS", "ticketClass": "wga"})
+
+    # print(result)
+except Exception as e:
+    logging.error(f"Couldn't connect to mongodb: {e}", exc_info=True) # Confirm this will work in GitHub WF
+    sys.exit(1)
+
+# What needs to happen
+
+"""
+1. Create front end page for web app.
+2. Create Mongodb cluster for flights.
+3. Setup script to pull from Mongodb.
+4. Setup email service within script.
+5. Schedule script.
+"""
 
 options = Options()
 options.add_argument("--headless=new")
@@ -91,14 +125,12 @@ for li in li_elements:
 
     print(flight)
 
-    # for ele in time_span_elements:
-    #     print(ele.find(string=True, recursive=False))
-
     time_span_counter = 0
     am_pm_span_counter = 0
     price_span_counter = 0
 
     print('')
+
 
     # for i in range(len(time_span_elements)) / 2:
     #     flight = []
