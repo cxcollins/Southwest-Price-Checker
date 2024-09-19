@@ -13,22 +13,18 @@ from dotenv import load_dotenv
 import os
 import logging
 import sys
+import random
 
 load_dotenv()
 
 mongo_uri = os.getenv("MONGO_URI")
 client = MongoClient(mongo_uri)
 
-print(mongo_uri)
-
 try:
     database = client.get_database("flights")
     flights_collection = database.get_collection("flights")
+    flights = flights_collection.find()
 
-    # Replace with a read, not a write
-    # result = flights_collection.insert_one({"departureTime": "12:00", "departureMeridiem": "AM", "arrivalTime": "12:00", "arrivalTimeMeridiem": "PM", "departureAirport": "SFO", "arrivalAirport": "BOS", "ticketClass": "wga"})
-
-    # print(result)
 except Exception as e:
     logging.error(f"Couldn't connect to mongodb: {e}", exc_info=True) # Confirm this will work in GitHub WF
     sys.exit(1)
@@ -36,11 +32,17 @@ except Exception as e:
 # What needs to happen
 
 """
-1. Create front end page for web app.
-2. Create Mongodb cluster for flights.
-3. Setup script to pull from Mongodb.
-4. Setup email service within script.
-5. Schedule script.
+1. Create front end page for web app. -> partially done
+2. Create Mongodb cluster for flights. -> done
+3. Setup script to pull from Mongodb. -> done
+4. Create logic to match flight
+    - cover if unavailable -> done
+    - having problem with second search
+    - calculate if flight is match
+    - call email function if match
+    - handle roundtrip
+5. Setup email service within script. -> not done
+6. Schedule script.
 """
 
 options = Options()
@@ -62,115 +64,99 @@ driver.execute_cdp_cmd('Network.setUserAgentOverride', {"userAgent": 'Mozilla/5.
 
 driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
-sw_url = """
-https://www.southwest.com/air/booking/select-depart.html?+departureTimeOfDay=ALL_DAY&+passengerType=ADULT&adultPassengersCount=1&adultsCount=1&departureDate=2024-11-17&
-departureTimeOfDay=ALL_DAY&destinationAirportCode=BOS&fareType=USD&from=SFO&int=HOMEQBOMAIR&originationAirportCode=SFO&passengerType=ADULT&returnDate=&returnTimeOfDay=
-ALL_DAY&to=BOS&tripType=oneway
-"""
+def check_flight(flight, leg):
+    sw_url = (
+            f"https://www.southwest.com/air/booking/select-{leg}.html?+departureTimeOfDay=ALL_DAY&+passengerType=ADULT&adultPassengersCount=1&adultsCount=1&departureDate={flight['departureDate']}&"
+            f"departureTimeOfDay=ALL_DAY&destinationAirportCode={flight['arrivalAirport']}&fareType=USD&from={flight['departureAirport']}&int=HOMEQBOMAIR&originationAirportCode={flight['departureAirport']}&"
+            f"passengerType=ADULT&returnDate={flight['returnDate']}&returnTimeOfDay=ALL_DAY&to={flight['arrivalAirport']}&tripType={'roundtrip' if flight['roundtrip'] else 'oneway'}"
+    )
 
-# Going to need to add functionality to click search if the home screen comes up
+    max_retries = 3
+    retry_count = 0
 
-max_retries = 3
-retry_count = 0
+    while retry_count < max_retries:
+        try:
+            # Navigate to the URL
+            print(sw_url)
+            driver.get(sw_url)
+            driver.maximize_window() # Do we need this?
 
-# while retry_count < max_retries:
-try:
-    # Navigate to the URL
-    driver.get(sw_url)
-    driver.maximize_window()
+            wait = WebDriverWait(driver, 40)
+            ul_element = wait.until(EC.visibility_of_element_located((By.XPATH, "//ul[@id='air-search-results-matrix-0']")))
 
-    wait = WebDriverWait(driver, 40)
-    ul_element = wait.until(EC.visibility_of_element_located((By.ID, "air-search-results-matrix-0")))
-    # break
+            # If element is found i.e., the site loads to the flights page
+            break
 
-except TimeoutException:
-    # print("Page load timed out, retrying...")
-    # retry_count += 1
-    button_to_click = driver.findElement(By.ID, "form-mixin--submit-button")
-    button_to_click.click()
+        # A timeout will likely happen if Southwest site suspects a driver is accessing page, and script will need to click search
+        except TimeoutException:
+            retry_count += 1
+            button_to_click = driver.find_element(By.ID, "form-mixin--submit-button")
+            button_to_click.click()
 
-    # Now we are on the flights page
-    driver.get(sw_url)
-    driver.maximize_window()
+            # Now we are on the flights page
+            driver.get(sw_url)
+            driver.maximize_window()
 
-    wait = WebDriverWait(driver, 40)
-    ul_element = wait.until(EC.visibility_of_element_located((By.ID, "air-search-results-matrix-0")))
+            wait = WebDriverWait(driver, 40)
+            ul_element = wait.until(EC.visibility_of_element_located((By.XPATH, "//ul[@id='air-search-results-matrix-0']")))
+
+    if retry_count == max_retries:
+        logging.error(f"Couldn't connect to mongodb: {e}", exc_info=True) # Confirm this will work in GitHub WF
+        sys.exit(1)
+
+    ul_html = ul_element.get_attribute('outerHTML')
 
 
-ul_html = ul_element.get_attribute('outerHTML')
+    soup = BeautifulSoup(ul_html, 'html.parser')
+
+    li_elements = soup.find_all('li')
+
+    list_of_flights = []
+
+    for li in li_elements:
+
+        flight = []
+
+        time_span_elements = li.find_all("span", class_="time--value")
+        am_pm_span_elements = li.find_all("span", class_="time--period")
+        price_span_elements = li.find_all("span", class_="fare-button--text")
+
+        flight.append(time_span_elements[0].find(string=True, recursive=False) + ' ' + am_pm_span_elements[0].find(string=True, recursive=False))
+        flight.append(time_span_elements[1].find(string=True, recursive=False) + ' ' + am_pm_span_elements[1].find(string=True, recursive=False))
+
+        for ele in price_span_elements:
+            string_element = ele.find(string=True, recursive=True)
+            if string_element[-7:] == 'Dollars':
+                flight.append(string_element[:-8])
+            elif string_element == 'Unavailable':
+                flight.append(10000) # If flight is unavailable, just assign a number that is surely higher than what user paid
+
+        print(flight)
+
+
+#   price_paid
+#   departureDate
+#   departureTime
+#   departureMeridiem
+#   arrivalDate
+#   arrivalTime
+#   arrivalTimeMeridiem
+#   departureAirport
+#   arrivalAirport
+#   ticketClass
+#   roundtrip
+
+for flight in flights:
+    price_paid = flight['price_paid']
+    current_price = 0
+
+    # This will need to return price of flight
+    check_flight(flight, 'depart')
+
+    sleep_time = random.uniform(10, 20)
+
+    time.sleep(sleep_time)
+
+    # Call again if roundtrip
 
 driver.quit()
-
-soup = BeautifulSoup(ul_html, 'html.parser')
-
-li_elements = soup.find_all('li')
-
-list_of_flights = []
-
-for li in li_elements:
-
-    flight = []
-
-    time_span_elements = li.find_all("span", class_="time--value")
-    am_pm_span_elements = li.find_all("span", class_="time--period")
-    price_span_elements = li.find_all("span", class_="swa-g-screen-reader-only")
-
-    flight.append(time_span_elements[0].find(string=True, recursive=False) + ' ' + am_pm_span_elements[0].find(string=True, recursive=False))
-    flight.append(time_span_elements[1].find(string=True, recursive=False) + ' ' + am_pm_span_elements[1].find(string=True, recursive=False))
-
-    for ele in price_span_elements:
-        string_element = ele.find(string=True, recursive=False)
-        if string_element[-7:] == 'Dollars':
-            flight.append(string_element[:-8])
-
-    print(flight)
-
-    time_span_counter = 0
-    am_pm_span_counter = 0
-    price_span_counter = 0
-
-    print('')
-
-
-    # for i in range(len(time_span_elements)) / 2:
-    #     flight = []
-
-    #     for _ in range(2):
-    #         flight.append(time_span_elements[time_span_counter] + ' ' + am_pm_span_elements[am_pm_span_counter])
-    #         time_span_counter += 1
-    #         am_pm_span_counter += 1
-
-    #     for _ in range(4):
-    #         flight.append(price_span_counter)
-    #         price_span_counter += 1
-
-
-
-# Comment back in after testing
-
-# departure_date = input('When do you want to leave? YYYY-MM-DD format \n')
-# roundtrip = input('Is this roundtrip or oneway? \n')
-
-# if roundtrip == 'roundtrip':
-#     return_date = input('When do you want to return? YYYY-MM-DD format \n')
-# else:
-#     return_date = ''
-
-# departure_airport = input('What is your departing airport\'s code? \n')
-# destination_airport = input('What is your destination airport\'s code? \n')
-
-# url_string = f"""
-# https://www.southwest.com/air/booking/select-depart.html?adultPassengersCount=1&adultsCount=1&departureDate={departure_date}&
-# departureTimeOfDay=ALL_DAY&destinationAirportCode={destination_airport}&fareType=USD&from={departure_airport}&int=HOMEQBOMAIR&
-# originationAirportCode={departure_airport}&passengerType=ADULT&returnDate={return_date}&returnTimeOfDay=ALL_DAY&to={destination_airport}&tripType={roundtrip}
-# """
-
-# url_string = "https://www.southwest.com/air/booking/select-depart.html?adultPassengersCount=1&adultsCount=1&departureDate=2024-11-07&departureTimeOfDay=ALL_DAY&destinationAirportCode=BOS&fareType=USD&from=SFO&int=HOMEQBOMAIR&originationAirportCode=SFO&passengerType=ADULT&returnDate=&returnTimeOfDay=ALL_DAY&to=BOS&tripType=oneway"
-
-# response = requests.get(url_string)
-
-# soup = BeautifulSoup(response.text, 'html.parser')
-
-# # times = soup.find_all('span', class_='time--value')
-
-# print(soup.prettify())
