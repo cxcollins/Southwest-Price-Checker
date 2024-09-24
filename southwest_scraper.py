@@ -6,6 +6,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException
+from selenium.webdriver.chrome.service import Service
 
 import time
 from pymongo import MongoClient
@@ -23,7 +24,7 @@ client = MongoClient(mongo_uri)
 try:
     database = client.get_database("flights")
     flights_collection = database.get_collection("flights")
-    flights = flights_collection.find()
+    mongo_flights = flights_collection.find()
 
 except Exception as e:
     logging.error(f"Couldn't connect to mongodb: {e}", exc_info=True) # Confirm this will work in GitHub WF
@@ -37,8 +38,8 @@ except Exception as e:
 3. Setup script to pull from Mongodb. -> done
 4. Create logic to match flight
     - cover if unavailable -> done
-    - having problem with second search
-    - calculate if flight is match
+    - having problem with second search -> fixed
+    - calculate if flight is match -> 
     - call email function if match
     - handle roundtrip
 5. Setup email service within script. -> not done
@@ -54,10 +55,14 @@ options.add_experimental_option(
 options.add_experimental_option('useAutomationExtension', False)
 options.add_argument('--disable-blink-features=AutomationControlled')
 options.add_argument(
-    "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.88 Safari/537.36")
+    "user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
+
+# Use path for custom driver executable
+driver_path = './chromedriver-mac-x64/chromedriver'
+service = Service(driver_path)
 
 # Initialize the Chrome driver
-driver = webdriver.Chrome(options=options)
+driver = webdriver.Chrome(options=options, service=service)
 
 #Setting up Chrome/83.0.4103.53 as useragent
 driver.execute_cdp_cmd('Network.setUserAgentOverride', {"userAgent": 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/83.0.4103.53 Safari/537.36'})
@@ -65,6 +70,7 @@ driver.execute_cdp_cmd('Network.setUserAgentOverride', {"userAgent": 'Mozilla/5.
 driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
 def check_flight(flight, leg):
+    flights_to_return = []
     sw_url = (
             f"https://www.southwest.com/air/booking/select-{leg}.html?+departureTimeOfDay=ALL_DAY&+passengerType=ADULT&adultPassengersCount=1&adultsCount=1&departureDate={flight['departureDate']}&"
             f"departureTimeOfDay=ALL_DAY&destinationAirportCode={flight['arrivalAirport']}&fareType=USD&from={flight['departureAirport']}&int=HOMEQBOMAIR&originationAirportCode={flight['departureAirport']}&"
@@ -79,29 +85,52 @@ def check_flight(flight, leg):
             # Navigate to the URL
             print(sw_url)
             driver.get(sw_url)
-            driver.maximize_window() # Do we need this?
+            driver.maximize_window()
+            # driver.save_screenshot('pic1.png') # Remove after finishing
 
             wait = WebDriverWait(driver, 40)
-            ul_element = wait.until(EC.visibility_of_element_located((By.XPATH, "//ul[@id='air-search-results-matrix-0']")))
+
+            if leg == 'depart':
+                ul_element = wait.until(EC.visibility_of_element_located((By.XPATH, "//ul[@id='air-search-results-matrix-0']")))
+
+            else:
+                ul_element = wait.until(EC.visibility_of_element_located((By.XPATH, "//ul[@id='air-search-results-matrix-1']")))
 
             # If element is found i.e., the site loads to the flights page
             break
 
         # A timeout will likely happen if Southwest site suspects a driver is accessing page, and script will need to click search
         except TimeoutException:
-            retry_count += 1
-            button_to_click = driver.find_element(By.ID, "form-mixin--submit-button")
-            button_to_click.click()
+            # Remove these before finishing
+            # print('got to timeout exception', '\n\n')
+            # driver.save_screenshot('pic2.png')
 
-            # Now we are on the flights page
-            driver.get(sw_url)
-            driver.maximize_window()
+            # print(driver.page_source)
 
-            wait = WebDriverWait(driver, 40)
-            ul_element = wait.until(EC.visibility_of_element_located((By.XPATH, "//ul[@id='air-search-results-matrix-0']")))
+            try:
+                button_to_click = driver.find_element(By.ID, "form-mixin--submit-button")
+                button_to_click.click()
+
+                # print('clicked button', '\n', driver.page_source)
+
+                # Now we are on the flights page
+                driver.get(sw_url)
+                driver.maximize_window()
+
+                wait = WebDriverWait(driver, 40)
+                
+                if leg == 'depart':
+                    ul_element = wait.until(EC.visibility_of_element_located((By.XPATH, "//ul[@id='air-search-results-matrix-0']")))
+
+                else:
+                    ul_element = wait.until(EC.visibility_of_element_located((By.XPATH, "//ul[@id='air-search-results-matrix-1']")))
+
+            except TimeoutException:
+                # Southwest blocked the whole operation; try again
+                retry_count += 1
 
     if retry_count == max_retries:
-        logging.error(f"Couldn't connect to mongodb: {e}", exc_info=True) # Confirm this will work in GitHub WF
+        logging.error(f"Couldn't connect to Southwest: {e}", exc_info=True) # Confirm this will work in GitHub WF
         sys.exit(1)
 
     ul_html = ul_element.get_attribute('outerHTML')
@@ -121,8 +150,10 @@ def check_flight(flight, leg):
         am_pm_span_elements = li.find_all("span", class_="time--period")
         price_span_elements = li.find_all("span", class_="fare-button--text")
 
-        flight.append(time_span_elements[0].find(string=True, recursive=False) + ' ' + am_pm_span_elements[0].find(string=True, recursive=False))
-        flight.append(time_span_elements[1].find(string=True, recursive=False) + ' ' + am_pm_span_elements[1].find(string=True, recursive=False))
+        flight.append(time_span_elements[0].find(string=True, recursive=False))
+        flight.append(am_pm_span_elements[0].find(string=True, recursive=False))
+        flight.append(time_span_elements[1].find(string=True, recursive=False))
+        flight.append(am_pm_span_elements[1].find(string=True, recursive=False))
 
         for ele in price_span_elements:
             string_element = ele.find(string=True, recursive=True)
@@ -132,31 +163,45 @@ def check_flight(flight, leg):
                 flight.append(10000) # If flight is unavailable, just assign a number that is surely higher than what user paid
 
         print(flight)
+        flights_to_return.append(flight)
+    return flights_to_return
 
-
-#   price_paid
-#   departureDate
-#   departureTime
-#   departureMeridiem
-#   arrivalDate
-#   arrivalTime
-#   arrivalTimeMeridiem
-#   departureAirport
-#   arrivalAirport
-#   ticketClass
-#   roundtrip
-
-for flight in flights:
+for flight in mongo_flights:
     price_paid = flight['price_paid']
     current_price = 0
 
-    # This will need to return price of flight
-    check_flight(flight, 'depart')
+    scraped_flights = check_flight(flight, 'depart')
+    
+    for scraped_flight in scraped_flights:
+        if scraped_flight[0] == flight['departureTime'] and scraped_flight[1] == flight['departureMeridiem'] and scraped_flight[2] == flight['arrivalTime'] and scraped_flight[3] == flight['arrivalMeridiem']:
+            if flight['ticketClass'] == 'wga':
+                current_price += int(scraped_flight[7])
+            elif flight['ticketClass'] == 'wgap':
+                current_price += int(scraped_flight[6])
+            elif flight['ticketClass'] == 'anytime':
+                current_price += int(scraped_flight[5])
+            elif flight['ticketClass'] == 'bs':
+                current_price += int(scraped_flight[4])
+            break
 
+    # Sleep for 10 - 20 seconds to simulate a human picking through
     sleep_time = random.uniform(10, 20)
-
     time.sleep(sleep_time)
 
-    # Call again if roundtrip
+    if flight['roundtrip'] == True:
+        scraped_return_flights = check_flight(flight, 'return')
+        for scraped_return_flight in scraped_flights:
+            if scraped_return_flight[0] == flight['returnDepartureTime'] and scraped_return_flight[1] == flight['returnDepartureMeridiem'] and scraped_return_flight[2] == flight['returnArrivalTime'] and scraped_return_flight[3] == flight['returnArrivalMeridiem']:
+                if flight['ticketClass'] == 'wga':
+                    current_price += int(scraped_flight[7])
+                elif flight['ticketClass'] == 'wgap':
+                    current_price += int(scraped_flight[6])
+                elif flight['ticketClass'] == 'anytime':
+                    current_price += int(scraped_flight[5])
+                elif flight['ticketClass'] == 'bs':
+                    current_price += int(scraped_flight[4])
+                break
+
+    print(current_price)
 
 driver.quit()
