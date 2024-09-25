@@ -15,10 +15,15 @@ import os
 import logging
 import sys
 import random
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 load_dotenv()
 
 mongo_uri = os.getenv("MONGO_URI")
+gmail_username = os.getenv("GMAIL_USERNAME")
+gmail_password = os.getenv("GMAIL_APP_PASSWORD")
 client = MongoClient(mongo_uri)
 
 try:
@@ -39,10 +44,10 @@ except Exception as e:
 4. Create logic to match flight
     - cover if unavailable -> done
     - having problem with second search -> fixed
-    - calculate if flight is match -> 
+    - calculate if flight is match -> done
     - call email function if match
-    - handle roundtrip
-5. Setup email service within script. -> not done
+    - handle roundtrip -> done
+5. Setup email service within script. -> done
 6. Schedule script.
 """
 
@@ -54,8 +59,6 @@ options.add_experimental_option(
     "excludeSwitches", ['enable-automation'])
 options.add_experimental_option('useAutomationExtension', False)
 options.add_argument('--disable-blink-features=AutomationControlled')
-options.add_argument(
-    "user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
 
 # Use path for custom driver executable
 driver_path = './chromedriver-mac-x64/chromedriver'
@@ -66,8 +69,26 @@ driver = webdriver.Chrome(options=options, service=service)
 
 #Setting up Chrome/83.0.4103.53 as useragent
 driver.execute_cdp_cmd('Network.setUserAgentOverride', {"userAgent": 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/83.0.4103.53 Safari/537.36'})
-
 driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+
+def send_email(flight):
+    msg = MIMEMultipart()
+    msg['From'] = gmail_username
+    msg['To'] = flight['email']
+    msg['Subject'] = f'Your Southwest flight from {flight['departureAirport']} to {flight['arrivalAirport']} has decreased in price'
+    body = "You should rebook your flight!"
+    msg.attach(MIMEText(body, 'plain'))
+
+    try:
+        smtp_server = smtplib.SMTP_SSL('smtp.gmail.com', 465)
+        smtp_server.login(gmail_username, gmail_password)
+        smtp_server.sendmail(msg["From"], flight['email'], msg.as_string())
+    
+    except Exception as e:
+        logging.error("Couldn't connect to server")
+
+    finally:
+        smtp_server.quit()
 
 def check_flight(flight, leg):
     flights_to_return = []
@@ -86,7 +107,7 @@ def check_flight(flight, leg):
             print(sw_url)
             driver.get(sw_url)
             driver.maximize_window()
-            # driver.save_screenshot('pic1.png') # Remove after finishing
+            driver.save_screenshot('pic1.png') # Remove after finishing
 
             wait = WebDriverWait(driver, 40)
 
@@ -103,7 +124,7 @@ def check_flight(flight, leg):
         except TimeoutException:
             # Remove these before finishing
             # print('got to timeout exception', '\n\n')
-            # driver.save_screenshot('pic2.png')
+            driver.save_screenshot('pic2.png')
 
             # print(driver.page_source)
 
@@ -130,7 +151,7 @@ def check_flight(flight, leg):
                 retry_count += 1
 
     if retry_count == max_retries:
-        logging.error(f"Couldn't connect to Southwest: {e}", exc_info=True) # Confirm this will work in GitHub WF
+        logging.error("Couldn't connect to Southwest") # Confirm this will work in GitHub WF
         sys.exit(1)
 
     ul_html = ul_element.get_attribute('outerHTML')
@@ -167,7 +188,8 @@ def check_flight(flight, leg):
     return flights_to_return
 
 for flight in mongo_flights:
-    price_paid = flight['price_paid']
+    # price_paid = flight['price_paid']
+    price_paid = 100000
     current_price = 0
 
     scraped_flights = check_flight(flight, 'depart')
@@ -202,6 +224,7 @@ for flight in mongo_flights:
                     current_price += int(scraped_flight[4])
                 break
 
-    print(current_price)
+    if current_price < price_paid:
+        send_email(flight)
 
 driver.quit()
