@@ -48,8 +48,10 @@ driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () =>
 
 def check_flight(flight, leg):
 
+    price_to_return = 0
+
     if flight['roundtrip']:
-        google_string = f"https://www.google.com/travel/flights?q=Flights%20to%20{flight['arrivalAirport']}%20from%20{flight['departureAirport']}%20on%20{flight['departureDate']}%20through%20{flight['returnDate']}%20southwest"
+        google_string = f"https://www.google.com/travel/flights?q=Flights%20to%20{flight['arrivalAirport']}%20from%20{flight['departureAirport']}%20on%20{flight['departureDate']}%20through%20{flight['returnDate']}%20on%20southwest"
     else:
         google_string = f"https://www.google.com/travel/flights?q=Flights%20to%20{flight['arrivalAirport']}%20from%20{flight['departureAirport']}%20on%20{flight['departureDate']}%20oneway%20on%20southwest"
 
@@ -59,13 +61,13 @@ def check_flight(flight, leg):
         driver.maximize_window()
         driver.save_screenshot('pic1.png')
 
-        wait = WebDriverWait(driver, 10)
+        wait = WebDriverWait(driver, 20)
 
         try:
             button = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(@aria-label, 'more flight')]")))
             button.click()
 
-            time.sleep(10)
+            time.sleep(2)
             driver.save_screenshot('pic2.png')
 
         except:
@@ -75,19 +77,75 @@ def check_flight(flight, leg):
         departure_times = driver.find_elements(By.XPATH, "//div[contains(@aria-label, 'Departure time:')]")
         arrival_times = driver.find_elements(By.XPATH, "//div[contains(@aria-label, 'Arrival time:')]")
         prices = driver.find_elements(By.XPATH, "//span[contains(@aria-label, 'US dollars')]") # Take every third
+        flight_details_buttons = driver.find_elements(By.XPATH, "//button[contains(@aria-label, 'Flight details')]")
+        flight_select_buttons = driver.find_elements(By.XPATH, "//button[contains(@aria-label, 'Select flight')]")
+
+        print(len(flight_select_buttons))
+
+        number_on_page = 0
 
         for i in range(len(departure_times)):
-            print(departure_times[i].get_attribute('outerHTML')[:-3])
-            print(departure_times[i].get_attribute('outerHTML')[-2:])
-            print(arrival_times[i].get_attribute('innerText')[:-3])
-            print(arrival_times[i].get_attribute('innerText')[-2:])
-            print(prices[i * 3].get_attribute('innerText')[-1:])
+            leaving_time = departure_times[i].get_attribute('innerText')[:-3]
+            leaving_meridiem = departure_times[i].get_attribute('innerText')[-2:]
+            arrival_time = arrival_times[i].get_attribute('innerText')[:-3]
+            arrival_meridiem = arrival_times[i].get_attribute('innerText')[-2:]
+            price = prices[i * 3].get_attribute('innerText')[1:]
 
-    except:
-        print('problem')
+            if leaving_time == flight['departureTime'] and leaving_meridiem == flight['departureMeridiem'] and arrival_time == flight['arrivalTime'] and arrival_meridiem == flight['arrivalMeridiem']:
+                price_to_return += int(price)
+                break
 
-        # //button[@aria-label='Select flight'] -> this is the button to select
+            number_on_page += 1
+
+        if flight['roundtrip']:
+            flight_details_buttons[number_on_page].click()
+            flight_select_buttons[number_on_page].click()
+            driver.save_screenshot("clicking through to return.png")
+
+            try:
+                button = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(@aria-label, 'more flight')]")))
+                button.click()
+
+                time.sleep(2)
+                driver.save_screenshot('pic3.png')
+
+            except:
+                print('There was no button')
+                # all of the flights were already loaded
+
+            # I have no idea why this line isn't working but find_elements is
+            # try:
+            #     wait.until(EC.visibility_of_element_located((By.XPATH, "//div[contains(@aria-label, 'Departure time:')]")))
+            
+            # except Exception as e:
+            #     print(e)
+
+            driver.save_screenshot("after opening all flights.png")
+
+            departure_times_return = driver.find_elements(By.XPATH, "//div[contains(@aria-label, 'Departure time:')]")
+            arrival_times_return = driver.find_elements(By.XPATH, "//div[contains(@aria-label, 'Arrival time:')]")
+            prices_return = driver.find_elements(By.XPATH, "//span[contains(@aria-label, 'US dollars')]") # Take every third
+
+            for i in range(len(departure_times_return)):
+                leaving_time = departure_times_return[i].get_attribute('innerText')[:-3]
+                leaving_meridiem = departure_times_return[i].get_attribute('innerText')[-2:]
+                arrival_time = arrival_times_return[i].get_attribute('innerText')[:-3]
+                arrival_meridiem = arrival_times_return[i].get_attribute('innerText')[-2:]
+                price = prices_return[i * 3].get_attribute('innerText')[1:]
+
+                if leaving_time == flight['returnDepartureTime'] and leaving_meridiem == flight['returnDepartureMeridiem'] and arrival_time == flight['returnArrivalTime'] and arrival_meridiem == flight['returnArrivalMeridiem']:
+                    price_to_return += int(price)
+                    break
+
+    except Exception as e:
+        print(e)
+
+    print(price_to_return)
+
+    return price_to_return
 
 for flight in mongo_flights:
 
     check_flight(flight, 'd')
+
+driver.quit()
