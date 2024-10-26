@@ -1,3 +1,5 @@
+# flake8: noqa
+
 from bs4 import BeautifulSoup
 
 from selenium import webdriver
@@ -14,6 +16,9 @@ from pymongo import MongoClient
 from dotenv import load_dotenv
 import os
 import logging
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 load_dotenv()
 
@@ -31,26 +36,27 @@ except Exception as e:
     logging.error(f"Couldn't connect to mongodb: {e}", exc_info=True) # Confirm if this works in GH
     sys.exit(1)
 
+# Create options object
 options = Options()
 options.add_argument("--headless=new")
 
 # Hiding automation - if breaks in future, add other arguments
-options.add_experimental_option(
-    "excludeSwitches", ['enable-automation'])
+options.add_experimental_option("excludeSwitches", ['enable-automation'])
 options.add_experimental_option('useAutomationExtension', False)
 options.add_argument('--disable-blink-features=AutomationControlled')
 
+#Setting up Chrome/83.0.4103.53 as useragent
 driver = webdriver.Chrome(options=options)
 
-#Setting up Chrome/83.0.4103.53 as useragent
 driver.execute_cdp_cmd('Network.setUserAgentOverride', {"userAgent": 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/83.0.4103.53 Safari/537.36'})
 driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
-def check_flight(flight, leg):
+
+def check_flight(flight):
 
     price_to_return = 0
 
-    if flight['roundtrip']:
+    if flight['roundtrip'] == 'roundtrip':
         google_string = f"https://www.google.com/travel/flights?q=Flights%20to%20{flight['arrivalAirport']}%20from%20{flight['departureAirport']}%20on%20{flight['departureDate']}%20through%20{flight['returnDate']}%20on%20southwest"
     else:
         google_string = f"https://www.google.com/travel/flights?q=Flights%20to%20{flight['arrivalAirport']}%20from%20{flight['departureAirport']}%20on%20{flight['departureDate']}%20oneway%20on%20southwest"
@@ -70,13 +76,12 @@ def check_flight(flight, leg):
             time.sleep(2)
             driver.save_screenshot('pic2.png')
 
-        except:
+        except:  # All of the flights were already loaded
             print('There was no button')
-            # all of the flights were already loaded
 
         departure_times = driver.find_elements(By.XPATH, "//div[contains(@aria-label, 'Departure time:')]")
         arrival_times = driver.find_elements(By.XPATH, "//div[contains(@aria-label, 'Arrival time:')]")
-        prices = driver.find_elements(By.XPATH, "//span[contains(@aria-label, 'US dollars')]") # Take every third
+        prices = driver.find_elements(By.XPATH, "//span[contains(@aria-label, 'US dollars')]")  # Take every third
         flight_details_buttons = driver.find_elements(By.XPATH, "//button[contains(@aria-label, 'Flight details')]")
         flight_select_buttons = driver.find_elements(By.XPATH, "//button[contains(@aria-label, 'Select flight')]")
 
@@ -109,16 +114,8 @@ def check_flight(flight, leg):
                 time.sleep(2)
                 driver.save_screenshot('pic3.png')
 
-            except:
+            except:  # All of the flights were already loaded
                 print('There was no button')
-                # all of the flights were already loaded
-
-            # I have no idea why this line isn't working but find_elements is
-            # try:
-            #     wait.until(EC.visibility_of_element_located((By.XPATH, "//div[contains(@aria-label, 'Departure time:')]")))
-            
-            # except Exception as e:
-            #     print(e)
 
             driver.save_screenshot("after opening all flights.png")
 
@@ -133,19 +130,44 @@ def check_flight(flight, leg):
                 arrival_meridiem = arrival_times_return[i].get_attribute('innerText')[-2:]
                 price = prices_return[i * 3].get_attribute('innerText')[1:]
 
-                if leaving_time == flight['returnDepartureTime'] and leaving_meridiem == flight['returnDepartureMeridiem'] and arrival_time == flight['returnArrivalTime'] and arrival_meridiem == flight['returnArrivalMeridiem']:
+                if (leaving_time == flight['returnDepartureTime'] and leaving_meridiem == flight['returnDepartureMeridiem']
+                        and arrival_time == flight['returnArrivalTime'] and arrival_meridiem == flight['returnArrivalMeridiem']):
                     price_to_return += int(price)
                     break
 
     except Exception as e:
-        print(e)
+        logging.error(f"Error running script: {e}", exc_info=True)
+        sys.exit(1)
 
     print(price_to_return)
 
     return price_to_return
 
+def send_email(flight):
+    msg = MIMEMultipart()
+    msg['From'] = gmail_username
+    msg['To'] = flight['email']
+    msg['Subject'] = f'Your Southwest flight from {flight['departureAirport']} to {flight['arrivalAirport']} has decreased in price'
+    body = "You should rebook your flight!"
+    msg.attach(MIMEText(body, 'plain'))
+
+    try:
+        smtp_server = smtplib.SMTP_SSL('smtp.gmail.com', 465)
+        smtp_server.login(gmail_username, gmail_password)
+        smtp_server.sendmail(msg["From"], flight['email'], msg.as_string())
+    
+    except Exception as e:
+        logging.error(f"Couldn't connect to server: {e}", exc_info=True)
+        sys.exit(1)
+
+    finally:
+        smtp_server.quit()
+
 for flight in mongo_flights:
 
-    check_flight(flight, 'd')
+    new_price = check_flight(flight)
+
+    if new_price < flight['pricePaid']:
+        send_email(flight)
 
 driver.quit()
