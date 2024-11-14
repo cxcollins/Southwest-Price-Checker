@@ -35,22 +35,6 @@ except Exception as e:
     logging.error(f"Couldn't connect to mongodb: {e}", exc_info=True) # Confirm this will work in GitHub WF
     sys.exit(1)
 
-# What needs to happen
-
-"""
-1. Create front end page for web app. -> partially done
-2. Create Mongodb cluster for flights. -> done
-3. Setup script to pull from Mongodb. -> done
-4. Create logic to match flight
-    - cover if unavailable -> done
-    - having problem with second search -> fixed
-    - calculate if flight is match -> done
-    - call email function if match
-    - handle roundtrip -> done
-5. Setup email service within script. -> done
-6. Schedule script.
-"""
-
 options = Options()
 options.add_argument("--headless=new")
 
@@ -122,17 +106,10 @@ def check_flight(flight, leg):
 
         # A timeout will likely happen if Southwest site suspects a driver is accessing page, and script will need to click search
         except TimeoutException:
-            # Remove these before finishing
-            # print('got to timeout exception', '\n\n')
-            driver.save_screenshot('pic2.png')
-
-            # print(driver.page_source)
 
             try:
                 button_to_click = driver.find_element(By.ID, "form-mixin--submit-button")
                 button_to_click.click()
-
-                # print('clicked button', '\n', driver.page_source)
 
                 # Now we are on the flights page
                 driver.get(sw_url)
@@ -188,8 +165,7 @@ def check_flight(flight, leg):
     return flights_to_return
 
 for flight in mongo_flights:
-    # price_paid = flight['price_paid']
-    price_paid = 100000
+    price_paid = flight['price_paid']
     current_price = 0
 
     scraped_flights = check_flight(flight, 'depart')
