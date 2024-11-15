@@ -4,7 +4,7 @@ This is the backend for the Southwest Flight Tracker on https://connorxcollins.c
 and notify the email address associated with the Mongo record if the flight price has dropped. While the MongoDB references are unique to my project, other parts of the script may be useful to copy.
 
 ### Google Scraper
-- **Operational** and **hosted on Vercel**.
+- **Operational** and **ran daily with GitHub Actions**.
 - Scrapes flight price information from Google Flights.
 - Runs daily and emails users
   
