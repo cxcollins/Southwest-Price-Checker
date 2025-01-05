@@ -25,5 +25,17 @@ jobs:
                 python -m pip install --upgrade pip
                 pip install -r flight_scraper/requirements.txt
 
+            - name: Set environment variables
+              env:
+                MONGO_URI: ${{ secrets.MONGO_URI }}
+                GMAIL_USERNAME: ${{ secrets.GMAIL_USERNAME }}
+                GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+              run: |
+                echo "Environment variables set"
+      
             - name: Run script
+              env:
+                MONGO_URI: ${{ secrets.MONGO_URI }}
+                GMAIL_USERNAME: ${{ secrets.GMAIL_USERNAME }}
+                GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
               run: python flight_scraper/google_scraper.py
