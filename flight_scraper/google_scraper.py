@@ -13,14 +13,14 @@ from selenium.webdriver.chrome.service import Service
 import time
 import sys
 from pymongo import MongoClient
-from dotenv import load_dotenv
+# from dotenv import load_dotenv
 import os
 import logging
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
-load_dotenv()
+# load_dotenv()
 
 mongo_uri = os.getenv("MONGO_URI")
 gmail_username = os.getenv("GMAIL_USERNAME")
