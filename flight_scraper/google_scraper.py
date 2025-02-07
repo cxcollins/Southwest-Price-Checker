@@ -19,6 +19,7 @@ import logging
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from datetime import datetime
 
 load_dotenv()
 
@@ -35,6 +36,18 @@ try:
 except Exception as e:
     logging.error(f"Couldn't connect to mongodb: {e}", exc_info=True) # Confirm if this works in GH
     sys.exit(1)
+
+today = datetime.today().date()
+
+for flight in mongo_flights:
+    try:
+        departure_date = datetime.strptime(flight['departureDate'], "%Y-%m-%d").date()
+
+        if departure_date < today:
+            flights_collection.delete_one({"_id": flight["_id"]})
+
+    except:
+        logging.error("Error calculating date and/or deleting old flight", exc_info=True)
 
 # Create options object
 options = Options()
