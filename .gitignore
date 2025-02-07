@@ -1,0 +1,4 @@
+.venv/
+.github/
+.DS_store
+.env
